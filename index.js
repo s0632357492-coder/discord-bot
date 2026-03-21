@@ -15,8 +15,14 @@ const {
 } = require("discord.js");
 
 /* ===================== CONFIGURATION & CONSTANTS ===================== */
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 const CONFIG_PATH = path.join(__dirname, "welcome_config.json");
+const TOKEN = process.env.TOKEN;
+
+if (!TOKEN) {
+    console.error("[CRITICAL] Missing TOKEN in environment variables!");
+    process.exit(1);
+}
 
 // Hardcoded Role IDs for the verification system
 const VERIFIED_ROLES = [
@@ -57,7 +63,7 @@ const ConfigManager = {
 };
 
 /* ===================== PERMISSION & HIERARCHY GUARDS ===================== */
-async function safelyAddRole(member, roleId, interaction = null) {
+async function safelyAddRole(member, roleId) {
     try {
         const guild = member.guild;
         const botMember = await guild.members.fetchMe();
@@ -66,12 +72,10 @@ async function safelyAddRole(member, roleId, interaction = null) {
         if (!role) throw new Error("Role not found in guild.");
         if (member.roles.cache.has(roleId)) return { success: true, alreadyHas: true };
 
-        // Check Bot Permissions
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
             throw new Error("Bot lacks 'Manage Roles' permission.");
         }
 
-        // Check Hierarchy (Bot's highest role must be above the target role)
         if (botMember.roles.highest.position <= role.position) {
             throw new Error(`Hierarchy Error: Cannot manage role '${role.name}' (Position too high).`);
         }
@@ -84,10 +88,12 @@ async function safelyAddRole(member, roleId, interaction = null) {
     }
 }
 
-/* ===================== WEB SERVER ===================== */
+/* ===================== WEB SERVER (RENDER KEEP-ALIVE) ===================== */
 const app = express();
-app.get("/", (req, res) => res.status(200).send("Production Bot Online"));
-app.listen(PORT, "0.0.0.0", () => console.log(`[SYSTEM] Heartbeat active on port ${PORT}`));
+app.get("/", (req, res) => res.status(200).send("Bot is alive"));
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[SYSTEM] Web server listening on port ${PORT}`);
+});
 
 /* ===================== DISCORD CLIENT ===================== */
 const client = new Client({
@@ -98,9 +104,12 @@ const client = new Client({
     ]
 });
 
-client.once("ready", () => console.log(`[SYSTEM] Logged in as ${client.user.tag} (v14 PRO)`));
+client.once("ready", () => {
+    console.log(`[SYSTEM] Logged in as ${client.user.tag}`);
+    console.log(`[SYSTEM] Production monitoring active on port ${PORT}`);
+});
 
-/* ===================== ROBUST WELCOME EVENT ===================== */
+/* ===================== WELCOME EVENT ===================== */
 client.on("guildMemberAdd", async (member) => {
     try {
         const config = ConfigManager.read();
@@ -111,7 +120,6 @@ client.on("guildMemberAdd", async (member) => {
         const channel = await member.guild.channels.fetch(guildConfig.channelId).catch(() => null);
         if (!channel || !channel.isTextBased()) return;
 
-        // Image Validation Guard
         const imageURL = (guildConfig.imageURL && guildConfig.imageURL.startsWith("http")) 
             ? guildConfig.imageURL 
             : null;
@@ -142,7 +150,6 @@ client.on("guildMemberAdd", async (member) => {
 
 /* ===================== INTERACTION HANDLER ===================== */
 client.on("interactionCreate", async (interaction) => {
-    // Utility to handle safe replies
     const safeReply = async (content, ephemeral = true) => {
         if (interaction.replied || interaction.deferred) {
             return interaction.editReply({ content }).catch(() => null);
@@ -151,7 +158,6 @@ client.on("interactionCreate", async (interaction) => {
     };
 
     try {
-        // --- SLASH COMMANDS ---
         if (interaction.isChatInputCommand()) {
             const { commandName, member, guildId, options } = interaction;
 
@@ -216,7 +222,6 @@ client.on("interactionCreate", async (interaction) => {
             }
         }
 
-        // --- BUTTONS ---
         if (interaction.isButton()) {
             const member = interaction.member;
 
@@ -267,7 +272,6 @@ client.on("interactionCreate", async (interaction) => {
             }
         }
 
-        // --- SELECT MENUS ---
         if (interaction.isStringSelectMenu()) {
             await interaction.deferReply({ ephemeral: true });
             const member = interaction.member;
@@ -282,16 +286,22 @@ client.on("interactionCreate", async (interaction) => {
         }
 
     } catch (err) {
-        console.error(`[INTERACTION ERROR] Action: ${interaction.customId || interaction.commandName} | User: ${interaction.user.tag} | Error: ${err.message}`);
+        console.error(`[INTERACTION ERROR] User: ${interaction.user?.tag} | Error: ${err.message}`);
         return safeReply("เกิดข้อผิดพลาดร้ายแรงภายในระบบ ❌");
     }
 });
 
 /* ===================== GLOBAL SAFETY NETS ===================== */
-process.on("unhandledRejection", err => console.error(`[ANTI-CRASH] Unhandled Rejection: ${err.stack}`));
-process.on("uncaughtException", err => console.error(`[ANTI-CRASH] Uncaught Exception: ${err.stack}`));
+process.on("unhandledRejection", (reason, promise) => {
+    console.error("[ANTI-CRASH] Unhandled Rejection at:", promise, "reason:", reason);
+});
 
-client.login(process.env.TOKEN).catch(err => {
+process.on("uncaughtException", (err) => {
+    console.error("[ANTI-CRASH] Uncaught Exception:", err);
+});
+
+/* ===================== LOGIN ===================== */
+client.login(TOKEN).catch(err => {
     console.error(`[CRITICAL] Login Failed: ${err.message}`);
     process.exit(1);
 });
