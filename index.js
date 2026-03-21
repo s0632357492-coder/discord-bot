@@ -10,55 +10,84 @@ const {
     ButtonStyle,
     StringSelectMenuBuilder,
     EmbedBuilder,
-    PermissionFlagsBits
+    PermissionFlagsBits,
+    ChannelType
 } = require("discord.js");
 
-/* ===================== CONFIG FILE PATH ===================== */
-const configPath = path.join(__dirname, "welcome_config.json");
+/* ===================== CONFIGURATION & CONSTANTS ===================== */
+const PORT = process.env.PORT || 10000;
+const CONFIG_PATH = path.join(__dirname, "welcome_config.json");
 
-/* ===================== HELPER FUNCTIONS ===================== */
-function readConfig() {
-    try {
-        if (!fs.existsSync(configPath)) {
-            fs.writeFileSync(configPath, JSON.stringify({}, null, 2));
+// Hardcoded Role IDs for the verification system
+const VERIFIED_ROLES = [
+    "1456568276019843175", "1470963054995832875", "1471033043992051765",
+    "1471033226515447809", "1471033642850717812", "1471033451414290453",
+    "1471033971121852416", "1471034152114720940", "1471034320381804623",
+    "1471034566910410793", "1471034832988405771", "1471036689420914820",
+    "1471694828223074500", "1471695121010397184", "1471696205091311617",
+    "1471696512525533245", "1471696656406937842", "1471696892126691519",
+    "1471697294364770495", "1471697587684774052", "1471697745692721244",
+    "1471698117563912232", "1471698431104909502", "1471698647027679374"
+];
+
+/* ===================== SAFE CONFIG MANAGER ===================== */
+const ConfigManager = {
+    read() {
+        try {
+            if (!fs.existsSync(CONFIG_PATH)) {
+                fs.writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2));
+                return {};
+            }
+            const data = fs.readFileSync(CONFIG_PATH, "utf8");
+            return JSON.parse(data || "{}");
+        } catch (error) {
+            console.error(`[CRITICAL] Config Read Failure: ${error.message}`);
             return {};
         }
-        const data = fs.readFileSync(configPath, "utf8");
-        return JSON.parse(data);
-    } catch (error) {
-        console.error("Error reading config:", error);
-        return {};
+    },
+    save(config) {
+        try {
+            fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+            return true;
+        } catch (error) {
+            console.error(`[CRITICAL] Config Save Failure: ${error.message}`);
+            return false;
+        }
     }
-}
+};
 
-function saveConfig(config) {
+/* ===================== PERMISSION & HIERARCHY GUARDS ===================== */
+async function safelyAddRole(member, roleId, interaction = null) {
     try {
-        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        const guild = member.guild;
+        const botMember = await guild.members.fetchMe();
+        const role = await guild.roles.fetch(roleId);
+
+        if (!role) throw new Error("Role not found in guild.");
+        if (member.roles.cache.has(roleId)) return { success: true, alreadyHas: true };
+
+        // Check Bot Permissions
+        if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+            throw new Error("Bot lacks 'Manage Roles' permission.");
+        }
+
+        // Check Hierarchy (Bot's highest role must be above the target role)
+        if (botMember.roles.highest.position <= role.position) {
+            throw new Error(`Hierarchy Error: Cannot manage role '${role.name}' (Position too high).`);
+        }
+
+        await member.roles.add(role);
+        return { success: true, alreadyHas: false };
     } catch (error) {
-        console.error("Error saving config:", error);
+        console.error(`[ROLE ERROR] User: ${member.user.tag} | Role: ${roleId} | Error: ${error.message}`);
+        return { success: false, error: error.message };
     }
 }
 
-/* ===================== ANTI CRASH ===================== */
-process.on("unhandledRejection", err => {
-    console.error("Unhandled rejection:", err);
-});
-
-process.on("uncaughtException", err => {
-    console.error("Uncaught exception:", err);
-});
-
-/* ===================== WEB SERVER (สำหรับ Render) ===================== */
+/* ===================== WEB SERVER ===================== */
 const app = express();
-const PORT = process.env.PORT || 10000;
-
-app.get("/", (req, res) => {
-    res.status(200).send("Bot is alive!");
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Web server running on port ${PORT}`);
-});
+app.get("/", (req, res) => res.status(200).send("Production Bot Online"));
+app.listen(PORT, "0.0.0.0", () => console.log(`[SYSTEM] Heartbeat active on port ${PORT}`));
 
 /* ===================== DISCORD CLIENT ===================== */
 const client = new Client({
@@ -69,162 +98,142 @@ const client = new Client({
     ]
 });
 
-client.once("ready", () => {
-    console.log(`Logged in as ${client.user.tag}`);
-    console.log("FORCE UPDATE v3 + Welcome System Active");
-});
+client.once("ready", () => console.log(`[SYSTEM] Logged in as ${client.user.tag} (v14 PRO)`));
 
-/* ===================== WELCOME EVENT ===================== */
+/* ===================== ROBUST WELCOME EVENT ===================== */
 client.on("guildMemberAdd", async (member) => {
     try {
-        console.log(`New member joined: ${member.user.tag} in ${member.guild.name}`);
-        
-        const config = readConfig();
+        const config = ConfigManager.read();
         const guildConfig = config[member.guild.id];
 
-        if (!guildConfig || !guildConfig.enabled) {
-            return console.log(`Welcome system disabled for ${member.guild.name}`);
-        }
+        if (!guildConfig || !guildConfig.enabled || !guildConfig.channelId) return;
 
-        const channel = member.guild.channels.cache.get(guildConfig.channelId);
-        if (!channel) {
-            return console.error(`Welcome channel ${guildConfig.channelId} not found.`);
-        }
+        const channel = await member.guild.channels.fetch(guildConfig.channelId).catch(() => null);
+        if (!channel || !channel.isTextBased()) return;
+
+        // Image Validation Guard
+        const imageURL = (guildConfig.imageURL && guildConfig.imageURL.startsWith("http")) 
+            ? guildConfig.imageURL 
+            : null;
 
         const welcomeEmbed = new EmbedBuilder()
-            .setColor("#ffb7c5")
+            .setColor("#ff7dfb")
             .setAuthor({ name: member.user.username, iconURL: member.user.displayAvatarURL() })
-            .setTitle(`Welcome @${member.user.username} To 【 🌸 SENSAWAI 🎐 】`)
+            .setTitle(`Welcome to 【 🌸 SENSAWAI 🎐 】`)
             .setDescription(
                 `✧･ﾟ: *✧･ﾟ:* **Welcome** *:･ﾟ✧*:･ﾟ✧\n\n` +
                 `➥ ยินดีต้อนรับสู่ 【 🌸 **SENSAWAI COMMUNITY** 🎐 】\n\n` +
                 `➥ **Name** : ${member.user.username}\n` +
                 `➥ **สมาชิกคนที่** : ${member.guild.memberCount}th\n\n` +
                 `➥ ขอให้มีความสุขกับที่นี่นะ มาเป็นใบไม้ต้นเดียวกันนะ 💖\n\n` +
-                `➥ กดรับยศที่ห้อง <#1456565359875457134> (โปรดตรวจสอบห้องยืนยัน)`
+                `➥ กดรับยศที่ห้อง <#1476986144318034017>`
             )
-            .setThumbnail(member.user.displayAvatarURL({ dynamic: true, size: 256 }))
-            .setImage(guildConfig.imageURL)
+            .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
             .setFooter({ text: `${member.user.tag}`, iconURL: member.guild.iconURL() })
             .setTimestamp();
 
-        await channel.send({ content: `Welcome <@${member.id}>`, embeds: [welcomeEmbed] });
+        if (imageURL) welcomeEmbed.setImage(imageURL);
 
+        await channel.send({ content: `Welcome <@${member.id}>`, embeds: [welcomeEmbed] });
     } catch (error) {
-        console.error("Error in guildMemberAdd event:", error);
+        console.error(`[EVENT ERROR] Welcome Join failed for ${member.user.tag}: ${error.message}`);
     }
 });
 
 /* ===================== INTERACTION HANDLER ===================== */
-client.on("interactionCreate", async interaction => {
+client.on("interactionCreate", async (interaction) => {
+    // Utility to handle safe replies
+    const safeReply = async (content, ephemeral = true) => {
+        if (interaction.replied || interaction.deferred) {
+            return interaction.editReply({ content }).catch(() => null);
+        }
+        return interaction.reply({ content, ephemeral }).catch(() => null);
+    };
+
     try {
-        /* ===================== SLASH COMMANDS ===================== */
+        // --- SLASH COMMANDS ---
         if (interaction.isChatInputCommand()) {
-            
-            // NEW: Setup Welcome
-            if (interaction.commandName === "welcome") {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                    return interaction.reply({ content: "คุณไม่มีสิทธิ์ใช้คำสั่งนี้ ❌", ephemeral: true });
+            const { commandName, member, guildId, options } = interaction;
+
+            if (commandName === "welcome") {
+                if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+                    return safeReply("คุณไม่มีสิทธิ์ใช้คำสั่งนี้ ❌");
                 }
 
-                const channel = interaction.options.getChannel("channel");
-                const imageURL = interaction.options.getString("image");
+                const channel = options.getChannel("channel");
+                const imageURL = options.getString("image");
 
-                const config = readConfig();
-                config[interaction.guildId] = {
-                    enabled: true,
-                    channelId: channel.id,
-                    imageURL: imageURL
-                };
+                if (!channel || !channel.isTextBased()) return safeReply("กรุณาเลือก Text Channel ที่ถูกต้อง ❌");
+                if (!imageURL.startsWith("http")) return safeReply("กรุณาใส่ Image URL ที่ถูกต้อง (http/https) ❌");
 
-                saveConfig(config);
-                console.log(`Welcome configured for guild: ${interaction.guildId}`);
+                const config = ConfigManager.read();
+                config[guildId] = { enabled: true, channelId: channel.id, imageURL };
                 
-                return interaction.reply({ content: "ตั้งค่าระบบ welcome สำเร็จแล้ว ✅", ephemeral: true });
+                if (ConfigManager.save(config)) return safeReply("ตั้งค่าระบบ welcome สำเร็จแล้ว ✅");
+                return safeReply("เกิดข้อผิดพลาดในการบันทึกข้อมูล ❌");
             }
 
-            // NEW: Stop Welcome
-            if (interaction.commandName === "stopw") {
-                if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                    return interaction.reply({ content: "คุณไม่มีสิทธิ์ใช้คำสั่งนี้ ❌", ephemeral: true });
+            if (commandName === "stopw") {
+                if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+                    return safeReply("คุณไม่มีสิทธิ์ใช้คำสั่งนี้ ❌");
                 }
 
-                const config = readConfig();
-                if (config[interaction.guildId]) {
-                    config[interaction.guildId].enabled = false;
-                    saveConfig(config);
+                const config = ConfigManager.read();
+                if (config[guildId]) {
+                    config[guildId].enabled = false;
+                    ConfigManager.save(config);
                 }
-
-                console.log(`Welcome disabled for guild: ${interaction.guildId}`);
-                return interaction.reply({ content: "ปิดระบบต้อนรับเรียบร้อยแล้ว ❌", ephemeral: true });
+                return safeReply("ปิดระบบต้อนรับเรียบร้อยแล้ว ❌");
             }
 
-            // EXISTING: setupverify
-            if (interaction.commandName === "setupverify") {
+            if (commandName === "setupverify") {
+                if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
+                    return safeReply("คุณไม่มีสิทธิ์ใช้คำสั่งนี้ ❌");
+                }
+
                 const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId("pvc")
-                        .setLabel("นักศึกษา ปวช.")
-                        .setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder()
-                        .setCustomId("pvs")
-                        .setLabel("นักศึกษา ปวส.")
-                        .setStyle(ButtonStyle.Success),
-                    new ButtonBuilder()
-                        .setCustomId("external")
-                        .setLabel("บุคคลภายนอก")
-                        .setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId("pvc").setLabel("นักศึกษา ปวช.").setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId("pvs").setLabel("นักศึกษา ปวส.").setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId("external").setLabel("บุคคลภายนอก").setStyle(ButtonStyle.Secondary)
+                );
+                return interaction.reply({ content: "กรุณาเลือกประเภท:", components: [row] });
+            }
+
+            if (commandName === "admcheck") {
+                await interaction.deferReply({ ephemeral: true });
+                await interaction.guild.members.fetch();
+
+                const notVerified = interaction.guild.members.cache.filter(m => 
+                    !m.user.bot && !VERIFIED_ROLES.some(roleId => m.roles.cache.has(roleId))
                 );
 
-                return interaction.reply({
-                    content: "กรุณาเลือกประเภท:",
-                    components: [row]
-                });
-            }
-
-            // EXISTING: admcheck
-            if (interaction.commandName === "admcheck") {
-                await interaction.deferReply({ ephemeral: true });
-
-                const verifiedRoles = [
-                    "1456568276019843175", "1470963054995832875", "1471033043992051765",
-                    "1471033226515447809", "1471033642850717812", "1471033451414290453",
-                    "1471033971121852416", "1471034152114720940", "1471034320381804623",
-                    "1471034566910410793", "1471034832988405771", "1471036689420914820",
-                    "1471694828223074500", "1471695121010397184", "1471696205091311617",
-                    "1471696512525533245", "1471696656406937842", "1471696892126691519",
-                    "1471697294364770495", "1471697587684774052", "1471697745692721244",
-                    "1471698117563912232", "1471698431104909502", "1471698647027679374"
-                ];
-
-                await interaction.guild.members.fetch();
-                const notVerified = interaction.guild.members.cache.filter(member => {
-                    if (member.user.bot) return false;
-                    return !verifiedRoles.some(roleId => member.roles.cache.has(roleId));
-                });
-
-                if (notVerified.size === 0) return interaction.editReply("ทุกคนได้รับยศแล้ว ✅");
+                if (notVerified.size === 0) return safeReply("ทุกคนได้รับยศแล้ว ✅");
 
                 let list = notVerified.map(m => `<@${m.id}>`).join("\n");
                 if (list.length > 1900) list = list.substring(0, 1900) + "\n...";
 
-                return interaction.editReply(`📋 คนที่ยังไม่ได้รับยศ (${notVerified.size} คน):\n\n${list}`);
+                return safeReply(`📋 คนที่ยังไม่ได้รับยศ (${notVerified.size} คน):\n\n${list}`);
             }
         }
 
-        /* ===================== BUTTONS ===================== */
+        // --- BUTTONS ---
         if (interaction.isButton()) {
+            const member = interaction.member;
+
             if (interaction.customId === "external") {
                 await interaction.deferReply({ ephemeral: true });
-                await interaction.member.roles.add("1470963054995832875");
-                return interaction.editReply({ content: "ได้รับยศแล้ว ✅" });
+                const result = await safelyAddRole(member, "1470963054995832875");
+                
+                if (result.success) return safeReply(result.alreadyHas ? "คุณมียศนี้อยู่แล้ว ✅" : "ได้รับยศแล้ว ✅");
+                return safeReply(`ไม่สามารถให้ยศได้: ${result.error} ❌`);
             }
 
-            if (interaction.customId === "pvc") {
+            if (interaction.customId === "pvc" || interaction.customId === "pvs") {
+                const isPVC = interaction.customId === "pvc";
                 const menu = new StringSelectMenuBuilder()
-                    .setCustomId("pvc_select")
-                    .setPlaceholder("เลือกสาขา ปวช.")
-                    .addOptions([
+                    .setCustomId(isPVC ? "pvc_select" : "pvs_select")
+                    .setPlaceholder(`เลือกสาขา ${isPVC ? "ปวช." : "ปวส."}`)
+                    .addOptions(isPVC ? [
                         { label: "การบัญชี", value: "1471033043992051765" },
                         { label: "การตลาด", value: "1471033226515447809" },
                         { label: "เทคโนโลยีสารสนเทศ", value: "1471033642850717812" },
@@ -235,19 +244,7 @@ client.on("interactionCreate", async interaction => {
                         { label: "ช่างอิเล็กทรอนิกส์", value: "1471034566910410793" },
                         { label: "ช่างกลโรงงาน", value: "1471034832988405771" },
                         { label: "ช่างเมคคาทรอนิกส์", value: "1471036689420914820" }
-                    ]);
-                return interaction.reply({
-                    content: "เลือกสาขา:",
-                    components: [new ActionRowBuilder().addComponents(menu)],
-                    ephemeral: true
-                });
-            }
-
-            if (interaction.customId === "pvs") {
-                const menu = new StringSelectMenuBuilder()
-                    .setCustomId("pvs_select")
-                    .setPlaceholder("เลือกสาขา ปวส.")
-                    .addOptions([
+                    ] : [
                         { label: "การบัญชี", value: "1471694828223074500" },
                         { label: "การตลาด", value: "1471695121010397184" },
                         { label: "เทคโนโลยีธุรกิจดิจิทัล", value: "1471696205091311617" },
@@ -261,31 +258,40 @@ client.on("interactionCreate", async interaction => {
                         { label: "เทคนิคอุตสาหกรรม", value: "1471698431104909502" },
                         { label: "เมคคาทรอนิกส์และหุ่นยนต์", value: "1471698647027679374" }
                     ]);
+
                 return interaction.reply({
-                    content: "เลือกสาขา:",
+                    content: `กรุณาเลือกสาขา ${isPVC ? "ปวช." : "ปวส."}:`,
                     components: [new ActionRowBuilder().addComponents(menu)],
                     ephemeral: true
                 });
             }
         }
 
-        /* ===================== DROPDOWN ===================== */
+        // --- SELECT MENUS ---
         if (interaction.isStringSelectMenu()) {
             await interaction.deferReply({ ephemeral: true });
+            const member = interaction.member;
             const roleId = interaction.values[0];
-            await interaction.member.roles.add(roleId);
-            await interaction.member.roles.add("1456568276019843175");
-            return interaction.editReply({ content: "ได้รับยศเรียบร้อย ✅" });
+            const verifiedRole = "1456568276019843175";
+
+            const res1 = await safelyAddRole(member, roleId);
+            const res2 = await safelyAddRole(member, verifiedRole);
+
+            if (res1.success && res2.success) return safeReply("ได้รับยศและยืนยันตัวตนเรียบร้อย ✅");
+            return safeReply(`เกิดปัญหาบางส่วน: ${res1.error || res2.error} ❌`);
         }
 
     } catch (err) {
-        console.error("Interaction Error:", err);
-        if (interaction.deferred || interaction.replied) {
-            interaction.editReply("เกิดข้อผิดพลาด ❌");
-        } else {
-            interaction.reply({ content: "เกิดข้อผิดพลาด ❌", ephemeral: true });
-        }
+        console.error(`[INTERACTION ERROR] Action: ${interaction.customId || interaction.commandName} | User: ${interaction.user.tag} | Error: ${err.message}`);
+        return safeReply("เกิดข้อผิดพลาดร้ายแรงภายในระบบ ❌");
     }
 });
 
-client.login(process.env.TOKEN);
+/* ===================== GLOBAL SAFETY NETS ===================== */
+process.on("unhandledRejection", err => console.error(`[ANTI-CRASH] Unhandled Rejection: ${err.stack}`));
+process.on("uncaughtException", err => console.error(`[ANTI-CRASH] Uncaught Exception: ${err.stack}`));
+
+client.login(process.env.TOKEN).catch(err => {
+    console.error(`[CRITICAL] Login Failed: ${err.message}`);
+    process.exit(1);
+});

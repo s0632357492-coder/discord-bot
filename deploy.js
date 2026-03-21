@@ -1,19 +1,17 @@
 require("dotenv").config();
 const { REST, Routes, SlashCommandBuilder, ChannelType } = require("discord.js");
 
-/* ================= COMMAND LIST ================= */
-
 const commands = [
-    // Existing Commands
+    // Verification System
     new SlashCommandBuilder()
         .setName("setupverify")
-        .setDescription("เปิดระบบยืนยันตัวตน"),
+        .setDescription("เปิดระบบยืนยันตัวตน (Admin Only)"),
 
     new SlashCommandBuilder()
         .setName("admcheck")
-        .setDescription("เช็คคนที่ยังไม่ได้รับยศ"),
+        .setDescription("เช็คคนที่ยังไม่ได้รับยศ (Admin Only)"),
 
-    // NEW: Welcome System Commands
+    // Welcome System
     new SlashCommandBuilder()
         .setName("welcome")
         .setDescription("ตั้งค่าระบบต้อนรับ")
@@ -24,29 +22,19 @@ const commands = [
                 .setRequired(true))
         .addStringOption(option => 
             option.setName("image")
-                .setDescription("URL ของรูปภาพ Embed (GIF/PNG/JPG)")
+                .setDescription("URL ของรูปภาพ/GIF สำหรับ Embed")
                 .setRequired(true)),
 
     new SlashCommandBuilder()
         .setName("stopw")
         .setDescription("ปิดระบบต้อนรับ")
-
 ].map(command => command.toJSON());
-
-/* ================= DISCORD REST ================= */
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-/* ================= DEPLOY COMMAND ================= */
-
 (async () => {
     try {
-        if (!process.env.TOKEN) throw new Error("TOKEN not found in .env");
-        if (!process.env.CLIENT_ID) throw new Error("CLIENT_ID not found in .env");
-        if (!process.env.GUILD_ID) throw new Error("GUILD_ID not found in .env");
-
-        console.log("🚀 เริ่มลงทะเบียน Slash Commands...");
-
+        console.log("🚀 Starting Slash Commands registration...");
         await rest.put(
             Routes.applicationGuildCommands(
                 process.env.CLIENT_ID,
@@ -54,11 +42,8 @@ const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
             ),
             { body: commands }
         );
-
-        console.log("✅ ลงทะเบียนคำสั่งสำเร็จแล้ว (รวมระบบ Welcome)");
-
+        console.log("✅ Successfully registered all commands.");
     } catch (error) {
-        console.error("❌ Deploy command error:");
-        console.error(error);
+        console.error("❌ Registration Error:", error);
     }
 })();
