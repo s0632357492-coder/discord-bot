@@ -15,12 +15,14 @@ const {
 } = require("discord.js");
 
 /* ===================== CONFIGURATION & CONSTANTS ===================== */
+// Render uses process.env.PORT. Fallback to 3000 for local.
 const PORT = process.env.PORT || 3000;
 const CONFIG_PATH = path.join(__dirname, "welcome_config.json");
-const TOKEN = process.env.TOKEN;
 
-if (!TOKEN) {
-    console.error("[CRITICAL] Missing TOKEN in environment variables!");
+// CRITICAL: Check Environment Variables
+console.log("TOKEN STATUS:", process.env.TOKEN ? "OK" : "MISSING");
+if (!process.env.TOKEN) {
+    console.error("[CRITICAL] TOKEN is missing in environment variables. Exiting...");
     process.exit(1);
 }
 
@@ -41,13 +43,14 @@ const ConfigManager = {
     read() {
         try {
             if (!fs.existsSync(CONFIG_PATH)) {
+                console.log("[CONFIG] File not found, creating new welcome_config.json");
                 fs.writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2));
                 return {};
             }
             const data = fs.readFileSync(CONFIG_PATH, "utf8");
             return JSON.parse(data || "{}");
         } catch (error) {
-            console.error(`[CRITICAL] Config Read Failure: ${error.message}`);
+            console.error(`[CONFIG ERROR] Read Failure: ${error.message}`);
             return {};
         }
     },
@@ -56,7 +59,7 @@ const ConfigManager = {
             fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
             return true;
         } catch (error) {
-            console.error(`[CRITICAL] Config Save Failure: ${error.message}`);
+            console.error(`[CONFIG ERROR] Save Failure: ${error.message}`);
             return false;
         }
     }
@@ -69,15 +72,15 @@ async function safelyAddRole(member, roleId) {
         const botMember = await guild.members.fetchMe();
         const role = await guild.roles.fetch(roleId);
 
-        if (!role) throw new Error("Role not found in guild.");
+        if (!role) throw new Error(`Role ID ${roleId} not found.`);
         if (member.roles.cache.has(roleId)) return { success: true, alreadyHas: true };
 
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
-            throw new Error("Bot lacks 'Manage Roles' permission.");
+            throw new Error("Missing 'Manage Roles' permission.");
         }
 
         if (botMember.roles.highest.position <= role.position) {
-            throw new Error(`Hierarchy Error: Cannot manage role '${role.name}' (Position too high).`);
+            throw new Error(`Hierarchy Error: Bot role is below '${role.name}'.`);
         }
 
         await member.roles.add(role);
@@ -88,14 +91,15 @@ async function safelyAddRole(member, roleId) {
     }
 }
 
-/* ===================== WEB SERVER (RENDER KEEP-ALIVE) ===================== */
+/* ===================== WEB SERVER (KEEP-ALIVE) ===================== */
 const app = express();
 app.get("/", (req, res) => res.status(200).send("Bot is alive"));
 app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[SYSTEM] Web server listening on port ${PORT}`);
+    console.log(`[SYSTEM] Express server bound to 0.0.0.0:${PORT}`);
 });
 
 /* ===================== DISCORD CLIENT ===================== */
+// NOTE: Ensure 'Server Members Intent' is ENABLED in the Discord Developer Portal
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -105,8 +109,8 @@ const client = new Client({
 });
 
 client.once("ready", () => {
-    console.log(`[SYSTEM] Logged in as ${client.user.tag}`);
-    console.log(`[SYSTEM] Production monitoring active on port ${PORT}`);
+    console.log("BOT ONLINE:", client.user.tag);
+    console.log(`[SYSTEM] Client ID: ${client.user.id}`);
 });
 
 /* ===================== WELCOME EVENT ===================== */
@@ -118,7 +122,10 @@ client.on("guildMemberAdd", async (member) => {
         if (!guildConfig || !guildConfig.enabled || !guildConfig.channelId) return;
 
         const channel = await member.guild.channels.fetch(guildConfig.channelId).catch(() => null);
-        if (!channel || !channel.isTextBased()) return;
+        if (!channel || !channel.isTextBased()) {
+            console.warn(`[EVENT WARN] Welcome channel for guild ${member.guild.id} is invalid.`);
+            return;
+        }
 
         const imageURL = (guildConfig.imageURL && guildConfig.imageURL.startsWith("http")) 
             ? guildConfig.imageURL 
@@ -144,20 +151,25 @@ client.on("guildMemberAdd", async (member) => {
 
         await channel.send({ content: `Welcome <@${member.id}>`, embeds: [welcomeEmbed] });
     } catch (error) {
-        console.error(`[EVENT ERROR] Welcome Join failed for ${member.user.tag}: ${error.message}`);
+        console.error(`[EVENT ERROR] guildMemberAdd failed for ${member.user.tag}: ${error.message}`);
     }
 });
 
 /* ===================== INTERACTION HANDLER ===================== */
 client.on("interactionCreate", async (interaction) => {
     const safeReply = async (content, ephemeral = true) => {
-        if (interaction.replied || interaction.deferred) {
-            return interaction.editReply({ content }).catch(() => null);
+        try {
+            if (interaction.replied || interaction.deferred) {
+                return await interaction.editReply({ content });
+            }
+            return await interaction.reply({ content, ephemeral });
+        } catch (e) {
+            console.error(`[INTERACTION LOG] Failed to reply: ${e.message}`);
         }
-        return interaction.reply({ content, ephemeral }).catch(() => null);
     };
 
     try {
+        // --- SLASH COMMANDS ---
         if (interaction.isChatInputCommand()) {
             const { commandName, member, guildId, options } = interaction;
 
@@ -170,7 +182,7 @@ client.on("interactionCreate", async (interaction) => {
                 const imageURL = options.getString("image");
 
                 if (!channel || !channel.isTextBased()) return safeReply("กรุณาเลือก Text Channel ที่ถูกต้อง ❌");
-                if (!imageURL.startsWith("http")) return safeReply("กรุณาใส่ Image URL ที่ถูกต้อง (http/https) ❌");
+                if (!imageURL || !imageURL.startsWith("http")) return safeReply("กรุณาใส่ Image URL ที่ถูกต้อง (http/https) ❌");
 
                 const config = ConfigManager.read();
                 config[guildId] = { enabled: true, channelId: channel.id, imageURL };
@@ -222,6 +234,7 @@ client.on("interactionCreate", async (interaction) => {
             }
         }
 
+        // --- BUTTONS ---
         if (interaction.isButton()) {
             const member = interaction.member;
 
@@ -264,7 +277,7 @@ client.on("interactionCreate", async (interaction) => {
                         { label: "เมคคาทรอนิกส์และหุ่นยนต์", value: "1471698647027679374" }
                     ]);
 
-                return interaction.reply({
+                return await interaction.reply({
                     content: `กรุณาเลือกสาขา ${isPVC ? "ปวช." : "ปวส."}:`,
                     components: [new ActionRowBuilder().addComponents(menu)],
                     ephemeral: true
@@ -272,6 +285,7 @@ client.on("interactionCreate", async (interaction) => {
             }
         }
 
+        // --- SELECT MENUS ---
         if (interaction.isStringSelectMenu()) {
             await interaction.deferReply({ ephemeral: true });
             const member = interaction.member;
@@ -282,26 +296,21 @@ client.on("interactionCreate", async (interaction) => {
             const res2 = await safelyAddRole(member, verifiedRole);
 
             if (res1.success && res2.success) return safeReply("ได้รับยศและยืนยันตัวตนเรียบร้อย ✅");
-            return safeReply(`เกิดปัญหาบางส่วน: ${res1.error || res2.error} ❌`);
+            return safeReply(`เกิดปัญหาบางส่วน: ${res1.error || res2.error || "Unknown Error"} ❌`);
         }
 
     } catch (err) {
-        console.error(`[INTERACTION ERROR] User: ${interaction.user?.tag} | Error: ${err.message}`);
+        console.error(`[INTERACTION ERROR] Action: ${interaction.customId || interaction.commandName || "Unknown"} | User: ${interaction.user?.tag} | Error: ${err.message}`);
         return safeReply("เกิดข้อผิดพลาดร้ายแรงภายในระบบ ❌");
     }
 });
 
 /* ===================== GLOBAL SAFETY NETS ===================== */
-process.on("unhandledRejection", (reason, promise) => {
-    console.error("[ANTI-CRASH] Unhandled Rejection at:", promise, "reason:", reason);
-});
+process.on("unhandledRejection", err => console.error(`[ANTI-CRASH] Unhandled Rejection: ${err.stack}`));
+process.on("uncaughtException", err => console.error(`[ANTI-CRASH] Uncaught Exception: ${err.stack}`));
 
-process.on("uncaughtException", (err) => {
-    console.error("[ANTI-CRASH] Uncaught Exception:", err);
-});
-
-/* ===================== LOGIN ===================== */
-client.login(TOKEN).catch(err => {
-    console.error(`[CRITICAL] Login Failed: ${err.message}`);
+/* ===================== BOT LOGIN ===================== */
+client.login(process.env.TOKEN).catch(err => {
+    console.error(`[CRITICAL] Discord Login Failed: ${err.message}`);
     process.exit(1);
 });
