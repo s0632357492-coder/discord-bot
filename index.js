@@ -11,7 +11,10 @@ const {
     StringSelectMenuBuilder,
     EmbedBuilder,
     PermissionFlagsBits,
-    ChannelType
+    ChannelType,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle
 } = require("discord.js");
 
 /* ===================== CONFIGURATION & CONSTANTS ===================== */
@@ -204,18 +207,21 @@ client.on("interactionCreate", async (interaction) => {
                 return safeReply("ปิดระบบต้อนรับเรียบร้อยแล้ว ❌");
             }
 
+            // START setupverify
             if (commandName === "setupverify") {
                 if (!member.permissions.has(PermissionFlagsBits.Administrator)) {
                     return safeReply("คุณไม่มีสิทธิ์ใช้คำสั่งนี้ ❌");
                 }
 
                 const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId("pvc").setLabel("นักศึกษา ปวช.").setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId("pvs").setLabel("นักศึกษา ปวส.").setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setCustomId("external").setLabel("บุคคลภายนอก").setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder()
+                        .setCustomId("external_apply_button")
+                        .setLabel("Apply for External Rank")
+                        .setStyle(ButtonStyle.Primary)
                 );
-                return interaction.reply({ content: "กรุณาเลือกประเภท:", components: [row] });
+                return interaction.reply({ content: "กดปุ่มด้านล่างเพื่อสมัครขอยศบุคคลภายนอก:", components: [row] });
             }
+            // END setupverify
 
             if (commandName === "admcheck") {
                 await interaction.deferReply({ ephemeral: true });
@@ -237,6 +243,55 @@ client.on("interactionCreate", async (interaction) => {
         // --- BUTTONS ---
         if (interaction.isButton()) {
             const member = interaction.member;
+
+            // START setupverify – button handler
+            if (interaction.customId === "external_apply_button") {
+                const modal = new ModalBuilder()
+                    .setCustomId("external_apply_modal")
+                    .setTitle("External Rank Application");
+
+                const fullNameInput = new TextInputBuilder()
+                    .setCustomId("fullname_input")
+                    .setLabel("Full Name")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true);
+
+                const ageInput = new TextInputBuilder()
+                    .setCustomId("age_input")
+                    .setLabel("Age")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true);
+
+                const relationInput = new TextInputBuilder()
+                    .setCustomId("relation_input")
+                    .setLabel("Relation to the college")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(true);
+
+                const inviteInput = new TextInputBuilder()
+                    .setCustomId("invite_input")
+                    .setLabel("Invited by (ใส่ - หากไม่มี)")
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(false)
+                    .setPlaceholder("-");
+
+                const reasonInput = new TextInputBuilder()
+                    .setCustomId("reason_input")
+                    .setLabel("Reason for joining")
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(true);
+
+                modal.addComponents(
+                    new ActionRowBuilder().addComponents(fullNameInput),
+                    new ActionRowBuilder().addComponents(ageInput),
+                    new ActionRowBuilder().addComponents(relationInput),
+                    new ActionRowBuilder().addComponents(inviteInput),
+                    new ActionRowBuilder().addComponents(reasonInput)
+                );
+
+                return interaction.showModal(modal);
+            }
+            // END setupverify – button handler
 
             if (interaction.customId === "external") {
                 await interaction.deferReply({ ephemeral: true });
@@ -284,6 +339,44 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
         }
+
+        // START setupverify – modal submit handler
+        if (interaction.isModalSubmit() && interaction.customId === "external_apply_modal") {
+            await interaction.deferReply({ ephemeral: true });
+
+            const fullName = interaction.fields.getTextInputValue("fullname_input");
+            const age      = interaction.fields.getTextInputValue("age_input");
+            const relation = interaction.fields.getTextInputValue("relation_input");
+            const invitedBy = interaction.fields.getTextInputValue("invite_input") || "-";
+            const reason   = interaction.fields.getTextInputValue("reason_input");
+
+            const applicationChannel = await interaction.client.channels.fetch("1496161996670767234").catch(() => null);
+            if (!applicationChannel || !applicationChannel.isTextBased()) {
+                return safeReply("ไม่พบห้องสำหรับรับใบสมัคร กรุณาติดต่อ Admin ❌");
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle("External Rank Application")
+                .setColor(0xFFC0CB)
+                .setThumbnail(interaction.user.displayAvatarURL({ dynamic: true }))
+                .addFields(
+                    { name: "Full Name",               value: fullName,  inline: false },
+                    { name: "Age",                     value: age,       inline: false },
+                    { name: "Relation to the college", value: relation,  inline: false },
+                    { name: "Invited by",              value: invitedBy, inline: false },
+                    { name: "Reason for joining",      value: reason,    inline: false }
+                )
+                .setFooter({ text: `User ID: ${interaction.user.id}` })
+                .setTimestamp();
+
+            await applicationChannel.send({
+                content: `<@${interaction.user.id}> <@&1460282155413278863>`,
+                embeds: [embed]
+            });
+
+            return safeReply("ส่งใบสมัครของคุณเรียบร้อยแล้ว ✅ Admin จะติดต่อกลับในเร็วๆ นี้");
+        }
+        // END setupverify – modal submit handler
 
         // --- SELECT MENUS ---
         if (interaction.isStringSelectMenu()) {
