@@ -213,13 +213,28 @@ client.on("interactionCreate", async (interaction) => {
                     return safeReply("คุณไม่มีสิทธิ์ใช้คำสั่งนี้ ❌");
                 }
 
+                const verifyEmbed = new EmbedBuilder()
+                    .setColor(0xFFC0CB)
+                    .setTitle("👾เลือกยศให้ตรงกับตัวเอง👾")
+                    .setDescription("กรุณาเลือกประเภทด้านล่าง")
+                    .setImage("https://media.tenor.com/x5B-vDGxlNIAAAAC/banner-kawaii.gif");
+
                 const row = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
-                        .setCustomId("external_apply_button")
-                        .setLabel("Apply for External Rank")
-                        .setStyle(ButtonStyle.Primary)
+                        .setCustomId("student_vocational")
+                        .setLabel("นักศึกษา ปวช.")
+                        .setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder()
+                        .setCustomId("student_highvoc")
+                        .setLabel("นักศึกษา ปวส.")
+                        .setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder()
+                        .setCustomId("external_person")
+                        .setLabel("บุคคลภายนอก")
+                        .setStyle(ButtonStyle.Secondary)
                 );
-                return interaction.reply({ content: "กดปุ่มด้านล่างเพื่อสมัครขอยศบุคคลภายนอก:", components: [row] });
+
+                return interaction.reply({ embeds: [verifyEmbed], components: [row] });
             }
             // END setupverify
 
